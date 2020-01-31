@@ -1,0 +1,321 @@
+#include <iostream>
+#include <list>
+#include <fstream>
+#include <stdlib.h>
+#include <math.h>
+#include "Particle.h"
+using namespace std;
+const double PI = 3.141592653589793;
+// properties of the space
+double  x_len    =  1.0;
+double  y_len    =  1.0;
+double  dt       =  0.005;
+double  dtfifth  =  dt/5;
+// radius
+double radius = 0.01;
+double dia2 = 4*radius*radius;
+// boundarys for the position of the particles, for a fixed radius
+double maxx = x_len - radius;
+double minx = radius;
+double maxy = y_len - radius;
+double miny = radius;
+// particle number
+const int root_num = 12;
+const int num = root_num*root_num; const int tmax = 400;
+
+// place holdes
+double new_x, new_y;
+double old_x, old_y;
+double new_vx;
+double new_vy;
+double dist2;
+char fileName[50]; bool overlap;
+
+//system("makdir -pv positions");
+
+bool check_coll(double, double, Particle*);
+void init(Particle (&partArr)[num]);
+void update(Particle (&partArr)[num]);
+void print(Particle (&partArr)[num], int);
+
+// make the divisions
+const int num_div = 10;
+double div_wh = 1/double(num_div);
+double x_left [num_div];
+double x_right [num_div]; 
+double y_bot [num_div];
+double y_top [num_div]; 
+list<Particle*> Part_list[num_div][num_div];
+
+
+int main()
+{
+    for (int itr_div_x = 0; itr_div_x < num_div; ++itr_div_x) { 
+        for (int itr_div_y = 0; itr_div_y < num_div; ++itr_div_y) {
+            x_left [itr_div_x] = double(itr_div_x)/double(num_div);
+            x_right [itr_div_x] = double((itr_div_x+1))/double(num_div);
+            y_bot [itr_div_y] = double(itr_div_y)/double(num_div);
+            y_top [itr_div_y] = double(itr_div_y+1)/double(num_div);
+        }
+    }
+
+    // Seed random
+    srand(2);
+    // Initialization
+    //cout << "Initialize the particles\n";
+    Particle partArr [num]; // place holder array all particles are off the map
+    init(partArr);
+
+   //list<Particle*>::iterator i;
+   //cout << x_left[0] << " ";
+   //cout << x_right[0] << " ";
+   //cout << endl;
+   //for(i=Part_list[0][0].begin(); i != Part_list[0][0].end(); ++i) {
+
+   //     cout << (*i)->x << " ";
+
+   // }
+   // cout << endl;
+
+    print(partArr, 0);
+    //print(partArr, 1);
+    for (int t=1; t<tmax; ++t) {
+        //cout << "time = " << t << "\n";
+        // cout << partArr[0].x << "\t" << partArr[0].y << "\t" << partArr[0].vx << "\t" << partArr[0].vy << "\n";
+        update(partArr);
+        // cout << partArr[0].x << "\t" << partArr[0].y << "\t" << partArr[0].vx << "\t" << partArr[0].vy << "\n";
+        if (t%10==0) print(partArr, t);
+        //double ke=0;
+        //for (int i=0; i<num; ++i) {
+        //ke += partArr[i].vx*partArr[i].vx+partArr[i].vy*partArr[i].vy;
+
+        //}
+    }
+
+
+
+
+
+    return 0;
+}
+
+
+void init(Particle (&partArr)[num]) {
+    // evenly spaced particles in the space
+    for(int i = 0; i<root_num; ++i) {
+        for(int j = 0; j<root_num; ++j) {
+            //cout << "particle " << i << ", "<< j << " num = "<< i*root_num + j << "\n";
+            // regular spacing
+            //cout <<  (double(i)+1/2) << endl;
+            partArr[i*root_num + j].x = x_len * 1.0/(root_num ) * (double(i)+1.0/2.0);
+            partArr[i*root_num + j].y = y_len * 1.0/(root_num ) * (double(j)+1.0/2.0);
+
+            partArr[i*root_num + j].x_old = partArr[i*root_num + j].x;
+            partArr[i*root_num + j].y_old = partArr[i*root_num + j].y;
+            partArr[i*root_num + j].x_org = partArr[i*root_num + j].x;
+            partArr[i*root_num + j].y_org = partArr[i*root_num + j].y;
+            // set radius
+            partArr[i*root_num + j].rad = radius;
+            // randomly assign velocities
+            double r1 = ((double) rand() / (RAND_MAX)) ;
+            double r2 = ((double) rand() / (RAND_MAX)) ;
+            double r = r1;;
+            double theta = r2*2*PI;
+
+            partArr[i*root_num + j].vx = r*cos(theta);  
+            partArr[i*root_num + j].vy = r*sin(theta);
+
+            //partArr[i*root_num + j].vx = -1;  
+            //partArr[i*root_num + j].vy = -1;
+            // put it in the right list
+            int ind_x , ind_y;
+            ind_x = floor(partArr[i*root_num + j].x / div_wh);
+            ind_y = floor(partArr[i*root_num + j].y / div_wh);
+            partArr[i*root_num + j].hoodx = ind_x;  
+            partArr[i*root_num + j].hoody = ind_y;
+            Part_list[ind_x][ind_y].push_back(&partArr[i*root_num + j]);
+
+        }
+    }
+}
+
+void update(Particle (&partArr)[num]) {
+    // move the particles one by one and check for collision with all other particles
+    for(int ix = 0; ix<num_div; ++ix) {
+        for(int iy = 0; iy<num_div; ++iy) {
+            // break one time-step into 5 smaller timesteps
+            Particle *p1, *p2;
+            for(list<Particle*>::iterator i=Part_list[ix][iy].begin(); i != Part_list[ix][iy].end(); ++i) {
+                p1=*i;
+                //cout << "ID: " << *i << " (ix, iy):  "<< ix << ", " << iy << "  hoodxy "<< p1->hoodx << ", " << p1->hoody << endl;
+                for (int itr = 0; itr<5; ++itr) {
+                    new_x = p1->x + p1->vx*dtfifth;
+                    new_y = p1->y + p1->vy*dtfifth;
+
+                    bool leftbox=false;
+
+                    if ( new_x > maxx ) {
+                        p1->vx = -p1->vx; 
+                        leftbox=true;
+                    }
+                    if ( new_y > maxy ) {
+                        p1->vy = -p1->vy; 
+                        leftbox=true;
+                    }
+                    if ( new_x < minx ) {
+                        p1->vx = -p1->vx; 
+                        leftbox=true;
+                    }
+                    if ( new_y < miny ) {
+                        p1->vy = -p1->vy; 
+                        leftbox=true;
+                    }
+                    if (leftbox) { 
+                        // do not update the position
+                        continue; 
+                    }
+
+                    overlap=false;
+                    for(int jx = ix-1; jx<=ix+1; ++jx) {
+                        if (jx<0 || jx>=num_div) continue;
+                        for(int jy = iy-1; jy<=iy+1; ++jy) {
+                            if (jy<0 || jy>=num_div) continue;
+                            for(list<Particle*>::iterator j=Part_list[jx][jy].begin(); j != Part_list[jx][jy].end(); ++j) {
+                                //cout << "j loop \n";
+                                p2=*j;
+                                if (p1!=p2) {
+                                    //cout << "ID: " << *j << " (jx, jy):  "<< jx << ", " << jy << "  hoodxy "<< p2->hoodx << ", " << p2->hoody << endl;
+                                    bool overlap_temp = false;
+                                    overlap_temp = check_coll(new_x, new_y, p2);
+                                    if (!overlap_temp) continue;
+
+                                    // update overlap to true if we found a collision
+                                    overlap = true;   // will stay true for all j particles
+                                    //Finding normal angle between two balls
+                                    double x1 =  p1->x;
+                                    double x2 =  p2->x;
+                                    double y1 =  p1->y;
+                                    double y2 =  p2->y;
+                                    double u1 =  p1->vx;
+                                    double v1 =  p1->vy;
+                                    double u2 =  p2->vx;
+                                    double v2 =  p2->vy;
+                                    double theta=atan2(y2-y1,x2-x1);
+                                    //Transforming balls velocity to normal coordinate
+                                    double VN1=(u1*cos(theta))+(v1*sin(theta));
+                                    double VT1=(-u1*sin(theta))+(v1*cos(theta));
+                                    double VN2=(u2*cos(theta))+(v2*sin(theta));
+                                    double VT2=(-u2*sin(theta))+(v2*cos(theta));
+                                    //Resolving colllision for normal axis
+                                    double VN1_F=VN2;
+                                    double VN2_F=VN1;
+                                    //Retransforming balls velocity to original coordinate
+                                    p1->vx=(VN1_F*cos(theta))-(VT1*sin(theta));
+                                    p1->vy=(VN1_F*sin(theta))+(VT1*cos(theta));
+                                    p2->vx=(VN2_F*cos(theta))-(VT2*sin(theta));
+                                    p2->vy=(VN2_F*sin(theta))+(VT2*cos(theta));
+                                    
+                                    
+                                    // stop all for debugging
+                                    //p1->vx=0;
+                                    //p1->vy=0;
+                                    //p2->vx=0;
+                                    //p2->vy=0;
+                                    // reverse all for debugging
+                                    //p1->vx=-p1->vx;
+                                    //p1->vy=-p1->vy;
+                                    //p2->vx=-p2->vx;
+                                    //p2->vy=-p2->vy;
+
+
+
+                                    //Retransforming balls velocity to original coordinate
+                                    //cout << "collision\n";
+                                    //p1->vx=0;
+                                    //p1->vy=0;
+                                    //p2->vx=0;
+                                    //p2->vy=0;
+                                }
+
+                            } // j
+                        } // jy
+                    } // end of jx
+                    if ( overlap == true ) {break;}                 // stop iterating over sub dt and go to next particle
+                    else {
+                        // update to new positions
+                        p1->x_old = p1->x;    // update the old position storage
+                        p1->y_old = p1->y;
+                        p1->x = new_x;               // update current position
+                        p1->y = new_y;
+
+                    }
+
+                } // itr
+
+                // update the grid positions
+                int ind_x, ind_y;
+                int ind_xp, ind_yp;
+                ind_x=p1->hoodx;
+                ind_y=p1->hoody;
+                ind_xp=ind_x;
+                ind_yp=ind_y;
+
+                //printf("before %3d%3d%3d%3d%9.6f%9.6f\n", ind_x, ind_y, ind_xp, ind_yp, p1->x, p1->y);
+                if (p1->x <= x_left[ind_x]) {ind_xp=ind_x-1; }
+                else if (p1->x > x_right[ind_x]) {ind_xp=ind_x+1; }
+
+                if (p1->y <= y_bot[ind_y]) {ind_yp=ind_y-1;}
+                else if (p1->y > y_top[ind_y]) {ind_yp=ind_y+1;}
+
+                //printf("after  %3d%3d%3d%3d%9.6f%9.6f\n", ind_x, ind_y, ind_xp, ind_yp, p1->x, p1->y);
+                if (ind_x!=ind_xp || ind_y!=ind_yp) {
+                    // add to new grid position
+                    p1->hoodx =  ind_xp;
+                    p1->hoody =  ind_yp;
+                    Part_list[ind_xp][ind_yp].push_back(p1);    // add to new list
+                    i = Part_list[ind_x][ind_y].erase (i);      // remove from old list
+                    //cout << "i="<< *i << endl;
+                    --i;                                        // move back one place
+                    //cout << "--i="<< *i << endl;
+                }
+            } // i
+        } // iy
+    } // ix
+}
+
+void print(Particle (&partArr)[num], int time_stamp) {
+    FILE * pFile;
+    int n;
+    char fileName [50];
+    double momentum = 0;
+    double disp = 0;
+    sprintf(fileName, "positions/%06d.dat", time_stamp);
+
+    pFile = fopen (fileName,"w");
+    fprintf (pFile, "#%3s%4s%4s%4s%14s%14s%14s%14s\n","ix","iy", "hoodx", "hoody", "x", "y", "x_org", "y_org" );
+    for(int ix = 0; ix<num_div; ++ix) {
+        for(int iy = 0; iy<num_div; ++iy) {
+            // break one time-step into 5 smaller timesteps
+            Particle *p1, *p2;
+            for(list<Particle*>::iterator i=Part_list[ix][iy].begin(); i != Part_list[ix][iy].end(); ++i) {
+                fprintf (pFile, "%4d%4d%4d%4d%14.9f%14.9f%14.9f%14.9f\n",ix,iy,(*i)->hoodx,(*i)->hoody,(*i)->x,(*i)->y, (*i)->x_org, (*i)->y_org);
+                momentum += 1/2 * ((*i)->x-(*i)->x_old)*((*i)->x-(*i)->x_old)+((*i)->y-(*i)->y_old)*((*i)->y-(*i)->y_old);
+                disp += sqrt(((*i)->x-(*i)->x_org)*((*i)->x-(*i)->x_org)+((*i)->y-(*i)->y_org)*((*i)->y-(*i)->y_org));
+            }
+        }
+    }
+    cout << time_stamp << "    " << disp / root_num / root_num << endl;
+    fclose (pFile);
+
+
+}
+
+bool check_coll(double x, double y, Particle *p2) {
+    dist2 = (x - p2->x)*(x - p2->x) + (y - p2->y)*(y - p2->y);
+    if (dist2 < dia2) {
+        return true;
+    }
+    return false;
+}
+
+
